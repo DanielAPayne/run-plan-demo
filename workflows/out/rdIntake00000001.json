@@ -1,0 +1,290 @@
+{
+  "id": "rdIntake00000001",
+  "name": "1. New lead: save, reply, start follow-ups",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0b5db3eb-75f7-5336-8b22-45d9996fbd6c",
+      "name": "New lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "fa949ca4-1b90-5bea-ab32-d539345e484a"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n// Accept only what the reply needs; say exactly what is wrong otherwise.\nconst b = $json.body || {};\nconst clean = (v) => (typeof v === 'string' ? v.trim() : '');\nconst lead = {\n  name: clean(b.name).slice(0, 120),\n  email: clean(b.email).toLowerCase().slice(0, 200),\n  phone: clean(b.phone).slice(0, 40),\n  service: clean(b.service).toLowerCase().slice(0, 80),\n  message: clean(b.message).slice(0, 2000),\n  source: clean(b.source).slice(0, 40) || 'web',\n  is_test: b.is_test === true,\n};\nconst problems = [];\nif (!lead.name) problems.push('name is required');\nif (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(lead.email)) problems.push('a valid email is required');\nreturn { json: { valid: problems.length === 0, problems, lead } };\n"
+      },
+      "id": "a2b1e02c-1ca9-556d-8dc2-53ff5c3ab393",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "283879cc-9e28-5b40-b768-970658789719",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "9fab53f5-9949-5edd-8f69-3d2bc2dd7d40",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads (name, email, phone, service, message, source, is_test)\nSELECT r.name, r.email, nullif(r.phone, ''), nullif(r.service, ''), nullif(r.message, ''), r.source, coalesce(r.is_test, false)\nFROM json_to_record($1::json) AS r(name text, email text, phone text, service text, message text, source text, is_test boolean)\nRETURNING id, name, email, service, is_test, received_at;",
+        "options": {
+          "queryBatching": "independently",
+          "queryReplacement": "={{ JSON.stringify($json.lead) }}"
+        }
+      },
+      "id": "e52cadce-6bb6-590d-8e04-d4632096e104",
+      "name": "Save lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, id: $json.id }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "5bec3ee6-6f9b-5075-a24e-f3917d79a4be",
+      "name": "Answer the form",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n// The first reply. In this demo it is chosen by rule from the service the lead asked about.\n// In a client build, this node is where a language model drafts the reply; everything\n// around it (saving first, sending, recording, the checks) stays the same.\nconst BUSINESS = 'Example Roofing Co.';\nconst l = $json;\nconst first = (l.name || 'there').split(/\\s+/)[0];\nconst service = l.service || '';\nlet line;\nif (service.includes('replace')) {\n  line = 'A full replacement starts with a free inspection, so we can give you a written quote and not a guess.';\n} else if (service.includes('repair') || service.includes('leak')) {\n  line = 'For a repair we can usually have someone look at it within two working days. If water is coming in now, reply URGENT and we will call you today.';\n} else if (service.includes('gutter')) {\n  line = 'Gutter work is quick to quote: a few photos are often enough.';\n} else if (service.includes('inspect')) {\n  line = 'An inspection takes about 45 minutes and you get the photos and a written summary.';\n} else {\n  line = 'Tell us a little more about what you need and we will point you to the right person.';\n}\nconst subject = `We got your message, ${first}`;\nconst body = [\n  `Hi ${first},`,\n  '',\n  `Thanks for contacting ${BUSINESS}. ${line}`,\n  '',\n  'You can book a time here: https://example-roofing.test/book',\n  '',\n  `${BUSINESS}`,\n  'Reply STOP and we will not email you again.',\n].join('\\n');\nreturn { json: { id: l.id, name: l.name, email: l.email, service, is_test: l.is_test === true, subject, body } };\n"
+      },
+      "id": "4c8bd25f-6be5-5cad-8bdf-8a43131a029b",
+      "name": "Draft reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "fromEmail": "hello@example-roofing.test",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "3fb61fdc-8e8e-5c88-8a7e-7caafde7420e",
+      "name": "Send reply",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "rdCredSmtp000001",
+          "name": "Mailpit SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH j AS (\n  SELECT * FROM json_to_record($1::json) AS r(id bigint, subject text)\n), m AS (\n  INSERT INTO messages (lead_id, kind, step, subject)\n  SELECT id, 'reply', 0, subject FROM j\n  RETURNING lead_id, sent_at\n)\nUPDATE leads l\nSET replied_at = m.sent_at,\n    next_followup_step = CASE WHEN l.is_test THEN NULL ELSE 1 END,\n    next_followup_at   = CASE WHEN l.is_test THEN NULL ELSE l.received_at + interval '1 day' END\nFROM m\nWHERE l.id = m.lead_id AND l.replied_at IS NULL\nRETURNING l.id, round(extract(epoch FROM (l.replied_at - l.received_at))::numeric, 1) AS reply_seconds;",
+        "options": {
+          "queryBatching": "independently",
+          "queryReplacement": "={{ JSON.stringify({ id: $('Draft reply').item.json.id, subject: $('Draft reply').item.json.subject }) }}"
+        }
+      },
+      "id": "dccbad1c-da77-562c-b8df-d07d0a0f3d35",
+      "name": "Record reply",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1540,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, problems: $json.problems }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "6efb3220-5226-531e-9f90-dd899a925351",
+      "name": "Refuse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "New lead": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Refuse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save lead": {
+      "main": [
+        [
+          {
+            "node": "Answer the form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer the form": {
+      "main": [
+        [
+          {
+            "node": "Draft reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft reply": {
+      "main": [
+        [
+          {
+            "node": "Send reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send reply": {
+      "main": [
+        [
+          {
+            "node": "Record reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "errorWorkflow": "rdErrorAlert0001"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "f3b80dc5-2e17-5f5f-b5bc-2eb90e945167"
+}

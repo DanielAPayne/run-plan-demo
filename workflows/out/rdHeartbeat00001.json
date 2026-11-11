@@ -1,0 +1,98 @@
+{
+  "id": "rdHeartbeat00001",
+  "name": "5. Heartbeat: every 5 minutes",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "8f1ae043-1267-5315-b2a8-0046c52f8910",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO heartbeats (at) VALUES (now()) ON CONFLICT DO NOTHING RETURNING at;",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "6e05ec6e-d9b3-5436-b649-207a92a57000",
+      "name": "Write heartbeat",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ops/heartbeat",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "36069658-eca1-567c-ae31-60b649370efe",
+      "name": "Run now",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "webhookId": "1c74dd66-f965-5f03-a6e0-92f34a7ad9be"
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Write heartbeat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Write heartbeat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "errorWorkflow": "rdErrorAlert0001"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "68d7e4be-e195-5f9c-9f90-b13937d01f3f"
+}

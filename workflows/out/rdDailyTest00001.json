@@ -1,0 +1,302 @@
+{
+  "id": "rdDailyTest00001",
+  "name": "4. Daily test: one marked record through the whole flow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "5 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c7ce3dce-e99b-5443-bab9-a33687b168eb",
+      "name": "Every day at 09:05",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// The daily test: one clearly marked record through the real front door.\nconst email = `runplan-test-${Date.now()}@rundemo.test`;\nreturn [{ json: { name: 'Run-plan Test', email, phone: '', service: 'roof repair',\n  message: 'Daily test record. Not a customer.', source: 'daily-test', is_test: true } }];\n"
+      },
+      "id": "c2a8d07c-f348-5961-b116-fad91abfc551",
+      "name": "Make test lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/lead",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "92959953-71ce-5ef0-bcbd-f0c76d033750",
+      "name": "Send it to the front door",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "id": "5bd81388-70e7-544e-969b-162fb5404371",
+      "name": "Wait 10 seconds",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "webhookId": "0fe3ab4f-19a0-5f94-ab36-c16c9f238ca8"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, (replied_at IS NOT NULL) AS replied,\n       round(extract(epoch FROM (replied_at - received_at))::numeric, 1) AS reply_seconds\nFROM leads\nWHERE email = (SELECT r.email FROM json_to_record($1::json) AS r(email text))\nORDER BY id DESC LIMIT 1;",
+        "options": {
+          "queryBatching": "independently",
+          "queryReplacement": "={{ JSON.stringify({ email: $('Make test lead').item.json.email }) }}"
+        }
+      },
+      "id": "2b0b3a22-d03d-5540-bb0b-93eef9607fde",
+      "name": "Read the lead back",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://mailpit:8025/api/v1/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ 'to:' + $('Make test lead').item.json.email }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "2248366f-c933-5e3b-afdd-43bef093632b",
+      "name": "Did the email arrive?",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n// Passed only if the record was saved, replied to within two minutes, and the email really arrived.\nconst sent = $('Make test lead').item.json;\nconst row = $('Read the lead back').item.json;\nconst mail = $json;\nconst replied = row.replied === true;\nconst seconds = row.reply_seconds === null || row.reply_seconds === undefined ? null : Number(row.reply_seconds);\nconst delivered = Number(mail.messages_count ?? mail.total ?? 0);\nconst passed = replied && delivered >= 1 && seconds !== null && seconds <= 120;\nreturn { json: { kind: 'daily-test', passed, detail: { email: sent.email, saved: row.id !== undefined, replied, reply_seconds: seconds, delivered } } };\n"
+      },
+      "id": "11274baf-370e-589f-95b1-bc641a409bfb",
+      "name": "Judge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO checks (kind, passed, detail)\nSELECT r.kind, r.passed, r.detail FROM json_to_record($1::json) AS r(kind text, passed boolean, detail jsonb)\nRETURNING id, passed, detail;",
+        "options": {
+          "queryBatching": "independently",
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "id": "39cb7608-df42-5e6a-becf-d5b1524c4255",
+      "name": "Record the result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1540,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n// A failed test is an error, so it reaches the same alert as any other failure.\nif ($json.passed !== true) {\n  throw new Error('Daily test failed: ' + JSON.stringify($json.detail));\n}\nreturn $input.item;\n"
+      },
+      "id": "03427600-dd58-5935-979e-c97115167991",
+      "name": "Fail if not passed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ops/daily-test",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "ae14f108-fcc5-5b22-b7e6-94e85c047d61",
+      "name": "Run now",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "webhookId": "809db5ae-5ca5-50d3-ae52-f5c54992062c"
+    }
+  ],
+  "connections": {
+    "Every day at 09:05": {
+      "main": [
+        [
+          {
+            "node": "Make test lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Make test lead": {
+      "main": [
+        [
+          {
+            "node": "Send it to the front door",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send it to the front door": {
+      "main": [
+        [
+          {
+            "node": "Wait 10 seconds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 10 seconds": {
+      "main": [
+        [
+          {
+            "node": "Read the lead back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the lead back": {
+      "main": [
+        [
+          {
+            "node": "Did the email arrive?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Did the email arrive?": {
+      "main": [
+        [
+          {
+            "node": "Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Judge": {
+      "main": [
+        [
+          {
+            "node": "Record the result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record the result": {
+      "main": [
+        [
+          {
+            "node": "Fail if not passed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Make test lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "errorWorkflow": "rdErrorAlert0001"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "bf79adcc-b3a6-55a1-aca4-3b314e9a03e9"
+}

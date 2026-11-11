@@ -1,0 +1,172 @@
+{
+  "id": "rdErrorAlert0001",
+  "name": "6. On any failure: record an incident, then alert",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "610794ab-8a49-5639-8f93-66f41f65fcca",
+      "name": "A workflow failed",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n// What failed, where, and which run, in a form that fits one alert line.\nconst e = $json;\nconst message = String(e.execution?.error?.message || e.trigger?.error?.message || 'unknown error').slice(0, 500);\nreturn { json: {\n  source: 'n8n-error-workflow',\n  workflow: e.workflow?.name || '(unknown)',\n  node: e.execution?.lastNodeExecuted || '(trigger)',\n  message,\n  execution_id: String(e.execution?.id ?? ''),\n} };\n"
+      },
+      "id": "26ecccde-adc1-5461-b12d-3cdb664e1bf7",
+      "name": "Summarise",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH j AS (\n  SELECT * FROM json_to_record($1::json) AS r(source text, workflow text, node text, message text, execution_id text)\n), again AS (\n  -- The same step failing again while its incident is open: count it, don't open another.\n  UPDATE incidents i\n  SET occurrences = i.occurrences + 1, last_seen_at = now(), execution_id = j.execution_id\n  FROM j\n  WHERE i.source = j.source AND i.workflow = j.workflow AND i.node = j.node AND i.resolved_at IS NULL\n  RETURNING i.id, i.opened_at, i.workflow, i.node, i.message, i.execution_id, i.occurrences\n), fresh AS (\n  INSERT INTO incidents (source, workflow, node, message, execution_id, last_seen_at)\n  SELECT source, workflow, node, message, execution_id, now() FROM j\n  WHERE NOT EXISTS (SELECT 1 FROM again)\n  RETURNING id, opened_at, workflow, node, message, execution_id, occurrences\n)\nSELECT * FROM again UNION ALL SELECT * FROM fresh;",
+        "options": {
+          "queryBatching": "independently",
+          "queryReplacement": "={{ JSON.stringify($json) }}"
+        }
+      },
+      "id": "7ba0f245-aa06-5ead-9fc7-a36fbfed0789",
+      "name": "Record incident",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ea733ac7-34cd-56af-9dda-55daed5e6e2a",
+              "leftValue": "={{ $json.occurrences == 1 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "2dd4994b-b9ed-57ee-9eb8-900413a4a491",
+      "name": "First time?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "fromEmail": "alerts@rundemo.test",
+        "toEmail": "ops@rundemo.test",
+        "subject": "=ALERT: {{ $json.workflow }} failed at {{ $json.node }}",
+        "emailFormat": "text",
+        "text": "=Incident {{ $json.id }}, opened {{ $json.opened_at }}\n\nWorkflow: {{ $json.workflow }}\nNode: {{ $json.node }}\nError: {{ $json.message }}\nExecution: {{ $json.execution_id }}\n",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "f8ef891a-d5ec-5e3c-87e0-d43d1c5ee8c0",
+      "name": "Alert the operator",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "rdCredAlertSmtp1",
+          "name": "Alert channel SMTP"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "A workflow failed": {
+      "main": [
+        [
+          {
+            "node": "Summarise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarise": {
+      "main": [
+        [
+          {
+            "node": "Record incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record incident": {
+      "main": [
+        [
+          {
+            "node": "First time?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "First time?": {
+      "main": [
+        [
+          {
+            "node": "Alert the operator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "5e5c72f6-d2a8-5708-bd32-b5d1368024ec"
+}

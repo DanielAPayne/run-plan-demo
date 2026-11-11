@@ -1,0 +1,119 @@
+{
+  "id": "rdSimulator00001",
+  "name": "7. Demo only: a synthetic lead every two hours, 08:17 to 20:17",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "17 8-20/2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "4d5ec123-a0a2-5706-9df4-2cd39fa6cc78",
+      "name": "Every two hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Demo traffic. These people do not exist; the addresses use the reserved .test domain.\nconst names = ['Maria Alvarez', 'James Okafor', 'Priya Nair', 'Tom Becker', 'Lena Fischer', 'Sam Whitfield',\n  'Aisha Rahman', 'Carlos Mendes', 'Nora Lindqvist', 'Ben Hartley', 'Grace Kim', 'Omar Haddad'];\nconst services = ['roof repair', 'roof repair', 'roof leak', 'roof replacement', 'gutter cleaning', 'roof inspection', 'other'];\nconst messages = ['Water stain on the bedroom ceiling after the storm.', 'A few shingles came off on the south side.',\n  'We are selling the house and need the roof checked.', 'Gutters overflow when it rains hard.',\n  'The roof is about 22 years old. What would a new one cost?', 'Can someone come this week?'];\nconst pick = (a) => a[Math.floor(Math.random() * a.length)];\nconst name = pick(names);\nconst tag = Date.now().toString(36);\nreturn [{ json: {\n  name,\n  email: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}.${tag}@leads.test`,\n  phone: '555-01' + String(Math.floor(Math.random() * 100)).padStart(2, '0'),\n  service: pick(services),\n  message: pick(messages),\n  source: 'simulator',\n  is_test: false,\n} }];\n"
+      },
+      "id": "b2bb260b-c088-5081-ab05-b64761c545c1",
+      "name": "Invent a lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/lead",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "350157b5-6ade-5ed8-ac08-634552ab1e44",
+      "name": "Send it to the front door",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ops/simulate",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "ec120656-efa4-5f90-8040-1ea85a565e0f",
+      "name": "Run now",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "webhookId": "daf7b0f7-d310-58c3-b0dc-42c37a8ce805"
+    }
+  ],
+  "connections": {
+    "Every two hours": {
+      "main": [
+        [
+          {
+            "node": "Invent a lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invent a lead": {
+      "main": [
+        [
+          {
+            "node": "Send it to the front door",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Invent a lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "errorWorkflow": "rdErrorAlert0001"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "76fedf88-fb60-5095-8f06-72e5a8857af3"
+}

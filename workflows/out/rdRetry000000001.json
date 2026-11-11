@@ -1,0 +1,243 @@
+{
+  "id": "rdRetry000000001",
+  "name": "2. Retry: reply to any lead that is still waiting",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "6ea5e6cb-927e-5a9f-9e37-d84b0ed6bc70",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET reply_attempts = reply_attempts + 1\nWHERE id IN (\n  SELECT id FROM leads\n  WHERE replied_at IS NULL AND received_at < now() - interval '2 minutes' AND reply_attempts < 10\n  ORDER BY id LIMIT 20\n)\nRETURNING id, name, email, service, is_test;",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "id": "c9ff82f1-f5c7-5156-a0aa-3fe069d39aef",
+      "name": "Leads still waiting",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0a1e34fd-4491-577f-aad9-a321a195a314",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "number",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "7598d46a-9cd2-5ddb-9416-1effeef73ca5",
+      "name": "Any?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n// The first reply. In this demo it is chosen by rule from the service the lead asked about.\n// In a client build, this node is where a language model drafts the reply; everything\n// around it (saving first, sending, recording, the checks) stays the same.\nconst BUSINESS = 'Example Roofing Co.';\nconst l = $json;\nconst first = (l.name || 'there').split(/\\s+/)[0];\nconst service = l.service || '';\nlet line;\nif (service.includes('replace')) {\n  line = 'A full replacement starts with a free inspection, so we can give you a written quote and not a guess.';\n} else if (service.includes('repair') || service.includes('leak')) {\n  line = 'For a repair we can usually have someone look at it within two working days. If water is coming in now, reply URGENT and we will call you today.';\n} else if (service.includes('gutter')) {\n  line = 'Gutter work is quick to quote: a few photos are often enough.';\n} else if (service.includes('inspect')) {\n  line = 'An inspection takes about 45 minutes and you get the photos and a written summary.';\n} else {\n  line = 'Tell us a little more about what you need and we will point you to the right person.';\n}\nconst subject = `We got your message, ${first}`;\nconst body = [\n  `Hi ${first},`,\n  '',\n  `Thanks for contacting ${BUSINESS}. ${line}`,\n  '',\n  'You can book a time here: https://example-roofing.test/book',\n  '',\n  `${BUSINESS}`,\n  'Reply STOP and we will not email you again.',\n].join('\\n');\nreturn { json: { id: l.id, name: l.name, email: l.email, service, is_test: l.is_test === true, subject, body } };\n"
+      },
+      "id": "174515e1-53bd-5ccd-aca7-641d304633e3",
+      "name": "Draft reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "fromEmail": "hello@example-roofing.test",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "2901c7b0-a046-5823-bfc1-6c0af49db126",
+      "name": "Send reply",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "rdCredSmtp000001",
+          "name": "Mailpit SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH j AS (\n  SELECT * FROM json_to_record($1::json) AS r(id bigint, subject text)\n), m AS (\n  INSERT INTO messages (lead_id, kind, step, subject)\n  SELECT id, 'reply', 0, subject FROM j\n  RETURNING lead_id, sent_at\n)\nUPDATE leads l\nSET replied_at = m.sent_at,\n    next_followup_step = CASE WHEN l.is_test THEN NULL ELSE 1 END,\n    next_followup_at   = CASE WHEN l.is_test THEN NULL ELSE l.received_at + interval '1 day' END\nFROM m\nWHERE l.id = m.lead_id AND l.replied_at IS NULL\nRETURNING l.id, round(extract(epoch FROM (l.replied_at - l.received_at))::numeric, 1) AS reply_seconds;",
+        "options": {
+          "queryBatching": "independently",
+          "queryReplacement": "={{ JSON.stringify({ id: $('Draft reply').item.json.id, subject: $('Draft reply').item.json.subject }) }}"
+        }
+      },
+      "id": "954e803a-41bd-562c-af10-b25a0bd098d5",
+      "name": "Record reply",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1100,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "rdCredPostgres01",
+          "name": "Demo Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ops/retry",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "b0abb4d5-6e5b-54de-8912-18af19c2bdd9",
+      "name": "Run now",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "webhookId": "0228a10b-417e-56dd-ae9b-7e18a0727d65"
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Leads still waiting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads still waiting": {
+      "main": [
+        [
+          {
+            "node": "Any?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any?": {
+      "main": [
+        [
+          {
+            "node": "Draft reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft reply": {
+      "main": [
+        [
+          {
+            "node": "Send reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send reply": {
+      "main": [
+        [
+          {
+            "node": "Record reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Leads still waiting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "errorWorkflow": "rdErrorAlert0001"
+  },
+  "active": false,
+  "pinData": {},
+  "versionId": "81163a16-1911-52cc-b709-18b48504a6c1"
+}
